@@ -26,10 +26,10 @@ let db;
 async function connectDB() {
   try {
     const connection = await mysql.createConnection({
-      host: process.env.db2.sql.g-portal.com,      	// z. B. db2.sql.g-portal.com
-      user: process.env.db_17972439_1,      		// z. B. db_17972439_1
-      password: process.env.slosRq53,  			// z. B. slosRq53
-      database: process.env.db_17972439_1,    		// z. B. db_17972439_1
+      host: process.env.MYSQL_HOST,      // z. B. db2.sql.g-portal.com
+      user: process.env.MYSQL_USER,      // z. B. db_17972439_1
+      password: process.env.MYSQL_PASS,  // z. B. slosRq53
+      database: process.env.MYSQL_DB,    // z. B. db_17972439_1
       port: 3306
     });
 
