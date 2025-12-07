@@ -1,91 +1,120 @@
+// server.js
 const express = require("express");
 const bodyParser = require("body-parser");
 const cors = require("cors");
 const crypto = require("crypto");
-const fetch = require("node-fetch");
 
 const app = express();
 
-app.use(bodyParser.json());
+// Body als JSON parsen + rohen Body behalten (falls du später Signaturen prüfen willst)
+app.use(bodyParser.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 app.use(cors());
 
-// Hier DEIN Tebex Secret Key!
-const TEBEX_SECRET = "f9ApQK6hlOp9JvTNqh8YVbYGqictmmEJf9ApQK6hlOp9JvTNqh8YVbYGqictmmEJ";
+// In-Memory Lizenzspeicher
+// ACHTUNG: Bei Render Free-Tier gehen diese Daten bei jedem Neustart verloren.
+// Für echte Produktion später z.B. eine kleine DB (SQLite, Mongo, etc.) nutzen.
+let licenses = {}; // { key: { expires, player, created } }
 
-// Speicher
-let licenses = {};
-
-// ROOT
+// ======================================================
+// ROOT – zum Testen im Browser
+// ======================================================
 app.get("/", (req, res) => {
   res.send("TheMob License Server is running.");
 });
 
-// WEBHOOK
-app.post("/tebex", async (req, res) => {
+// ======================================================
+// 1) TEBEX WEBHOOK: POST https://<dein-render>.onrender.com/tebex
+//    → in Tebex als Checkout Webhook Endpoint eintragen
+// ======================================================
+app.post("/tebex", (req, res) => {
+  console.log("📬 Tebex Webhook:", JSON.stringify(req.body, null, 2));
 
-  const body = req.body;
-  const id = body.id;
-  const type = body.type;
-
-  console.log("📬 Tebex webhook", type, id);
+  const body = req.body || {};
+  const id = body.id || null;
+  const type = body.type || "unknown";
 
   if (type === "validation.webhook") {
-    return res.json({ id });
+    console.log("✅ Validation Webhook erhalten:", id);
+    return res.json({ id: id });
   }
 
   if (type === "payment.completed") {
 
-    const player = body.subject.customer.username.username;
+    const subject = body.subject || {};
+    const customer = subject.customer || {};
+    const usernameObj = customer.username || {};
 
+    const playerName = usernameObj.username || "unknown";
+
+    const durationDays = 30;
     const key = crypto.randomBytes(16).toString("hex");
-    const expires = Date.now() + 30 * 24 * 60 * 60 * 1000;
+    const expires = Date.now() + durationDays * 24 * 60 * 60 * 1000;
 
-    licenses[key] = { player, expires };
+    licenses[key] = {
+      expires,
+      player: playerName,
+      created: Date.now()
+    };
 
-    console.log("💎 KEY GENERATED:", key);
+    console.log("💎 Neue Premium-Lizenz erstellt:", key);
 
-    // ==========================================
-    //  **SCHRITT 1: LICENSE KEY IN TEBEX SPEICHERN**
-    // ==========================================
-    await fetch(`https://plugin.tebex.io/payments/${id}/variables`, {
-      method: "POST",
-      headers: {
-        "X-Tebex-Secret": TEBEX_SECRET,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        license_key: key
-      })
-    });
-
-    console.log("📦 KEY stored in Tebex order");
-
-    // ==========================================
-    // Rückgabe an Tebex
-    // ==========================================
     return res.json({
-      id,
-      success: true
+      id: id,
+      success: true,
+
+      // 👇 Käufer sieht es in der Email + Checkout-Seite
+      note: `Your Premium License Key: ${key}`,
+
+      license: key,
+      player: playerName,
+      expires
     });
   }
-
-  return res.json({ id, received: true });
+  // Unbekannter Webhook-Typ
+  console.log("ℹ Unbehandelter Webhook-Typ:", type);
+  return res.json({ id: id, received: true });
 });
 
-// VALIDATE
+// ======================================================
+// 2) VALIDATE – vom Minecraft-Plugin aufgerufen
+//    GET https://<dein-render>.onrender.com/validate?key=XXXX
+// ======================================================
 app.get("/validate", (req, res) => {
   const key = req.query.key;
 
-  if (!licenses[key]) return res.json({ valid: false });
-  if (Date.now() > licenses[key].expires) return res.json({ valid: false });
+  if (!key) {
+    console.log("❌ Validate ohne Key aufgerufen.");
+    return res.json({ valid: false });
+  }
 
+  const lic = licenses[key];
+  if (!lic) {
+    console.log("❌ Unknown license key:", key);
+    return res.json({ valid: false });
+  }
+
+  // Abgelaufen?
+  if (Date.now() > lic.expires) {
+    console.log("⌛ License expired:", key);
+    return res.json({ valid: false });
+  }
+
+  console.log("✅ License valid:", key, "Player:", lic.player);
   return res.json({
     valid: true,
-    player: licenses[key].player,
-    expires: licenses[key].expires
+    player: lic.player,
+    expires: lic.expires
   });
 });
 
-app.listen(3000, () => {
-  console.log("🚀 License Server running");
+// ======================================================
+// SERVER STARTEN
+// ======================================================
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log("🚀 License server running on port", PORT);
 });
