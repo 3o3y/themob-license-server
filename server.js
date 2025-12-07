@@ -1,5 +1,5 @@
 // ======================================================
-//  TheMob – License Server (Final Version, RESEND)
+//  TheMob – License Server (MySQL + RESEND Version)
 // ======================================================
 
 const express = require("express");
@@ -7,6 +7,7 @@ const bodyParser = require("body-parser");
 const cors = require("cors");
 const crypto = require("crypto");
 const { Resend } = require("resend");
+const mysql = require("mysql2/promise");
 
 const app = express();
 
@@ -17,16 +18,47 @@ app.use(bodyParser.json({
 app.use(cors());
 
 // ----------------------------------------------------------
-//  CONFIG
+//  MYSQL CONNECTION (with Auto-Reconnect)
 // ----------------------------------------------------------
 
-const TARGET_PACKAGE_ID = 7156613;
+let db;
 
-// In-Memory Lizenzspeicher
-let licenses = {}; 
+async function connectDB() {
+  try {
+    const connection = await mysql.createConnection({
+      host: db2.sql.g-portal.com,
+      user: db_17972439_1,
+      password: slosRq53,
+      database: db_17972439_1,
+      port: 3306
+    });
+
+    console.log("✅ MySQL: Verbindung hergestellt.");
+    return connection;
+
+  } catch (err) {
+    console.error("❌ MySQL Verbindung fehlgeschlagen:", err);
+    setTimeout(connectDB, 2000); // retry
+  }
+}
+
+(async () => {
+  db = await connectDB();
+
+  if (db) {
+    db.on("error", async (err) => {
+      console.error("❌ MySQL Fehler:", err);
+
+      if (err.code === "PROTOCOL_CONNECTION_LOST") {
+        console.log("🔄 MySQL wird neu verbunden...");
+        db = await connectDB();
+      }
+    });
+  }
+})();
 
 // ----------------------------------------------------------
-//  EMAIL SENDER – RESEND
+//  RESEND EMAIL SENDER
 // ----------------------------------------------------------
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -49,79 +81,109 @@ async function sendLicenseEmail(to, key) {
     console.log("📧 Email sent to:", to);
 
   } catch (err) {
-    console.error("❌ Email sending failed (Resend):", err);
+    console.error("❌ Email sending failed:", err);
+  }
+}
+
+// ----------------------------------------------------------
+//  MYSQL SAVE LICENSE
+// ----------------------------------------------------------
+
+async function saveLicense(key, player, email, expires) {
+  try {
+    await db.execute(
+      "INSERT INTO licenses (license_key, player, email, expires, created) VALUES (?, ?, ?, ?, ?)",
+      [key, player, email, expires, Date.now()]
+    );
+
+    console.log("💾 Lizenz gespeichert (MySQL):", key);
+
+  } catch (err) {
+    console.error("❌ FEHLER beim Speichern in MySQL:", err);
+  }
+}
+
+// ----------------------------------------------------------
+//  MYSQL GET LICENSE
+// ----------------------------------------------------------
+
+async function getLicense(key) {
+  try {
+    const [rows] = await db.execute(
+      "SELECT * FROM licenses WHERE license_key = ? LIMIT 1",
+      [key]
+    );
+
+    return rows.length > 0 ? rows[0] : null;
+
+  } catch (err) {
+    console.error("❌ FEHLER beim Lesen aus MySQL:", err);
+    return null;
   }
 }
 
 // ----------------------------------------------------------
 //  ROOT
 // ----------------------------------------------------------
+
 app.get("/", (req, res) => {
-  res.send("TheMob License Server is running.");
+  res.send("TheMob License Server is running (MySQL mode).");
 });
 
 // ----------------------------------------------------------
 //  TEBEX WEBHOOK HANDLER
 // ----------------------------------------------------------
+
+const TARGET_PACKAGE_ID = 7156613;
+
 app.post("/tebex", async (req, res) => {
   console.log("📬 Tebex Webhook:", JSON.stringify(req.body, null, 2));
 
   const body = req.body || {};
-  const id   = body.id   || null;
+  const id = body.id || null;
   const type = body.type || "unknown";
 
+  // VALIDATION
   if (type === "validation.webhook") {
-    console.log("✅ Validation Webhook bestätigt:", id);
-    return res.json({ id: id });
+    return res.json({ id });
   }
 
+  // PAYMENT COMPLETED
   if (type === "payment.completed") {
 
-    const subject  = body.subject  || {};
-    const customer = subject.customer || {};
-    const products = subject.products || [];
-    const product  = products[0] || {};
+    const product = body.subject?.products?.[0] || {};
+    const customer = body.subject?.customer || {};
 
-    const packageId = product.id || 0;
-
-    console.log("📦 Paket gekauft:", packageId);
-
-    if (packageId !== TARGET_PACKAGE_ID) {
-      console.log("⚠ Fremdes Paket – kein Lizenzkey erzeugt.");
+    if (product.id !== TARGET_PACKAGE_ID) {
+      console.log("⚠ Fremdes Paket – kein Key.");
       return res.json({ id, ignored: true });
     }
 
-    const playerName = customer?.username?.username || "unknown";
-    const email      = customer?.email || null;
+    const player = customer?.username?.username || "unknown";
+    const email = customer?.email || null;
 
     const key = crypto.randomBytes(16).toString("hex");
     const expires = Date.now() + 30 * 24 * 60 * 60 * 1000;
 
-    licenses[key] = {
-      expires,
-      player: playerName,
-      email,
-      created: Date.now()
-    };
+    console.log("💎 Lizenz erstellt:", key);
 
-    console.log("💎 Neue Lizenz erstellt:", key);
-    console.log("📧 Käufer-Email:", email);
+    // Save to MySQL
+    await saveLicense(key, player, email, expires);
 
-    // Erst an Tebex antworten
+    // Answer Tebex
     res.json({
       id,
       success: true,
-      note: `Your Premium License Key: ${key}`,
       license: key,
-      player: playerName,
+      player,
       expires
     });
 
-    // Email senden (async)
+    // Send email
     if (email) {
       sendLicenseEmail(email, key)
-        .then(() => console.log("📧 Email sent asynchronously"))
-        .catch(err => console.error("❌ Async email error:", err));
+        .then(() => console.log("📧 Email sent async"))
+        .catch(err => console.error("❌ Async Email Error:", err));
     }
 
     return;
@@ -131,19 +193,20 @@ app.post("/tebex", async (req, res) => {
 });
 
 // ----------------------------------------------------------
-//  VALIDATE ENDPOINT
+//  VALIDATE ENDPOINT (for Minecraft plugin)
 // ----------------------------------------------------------
-app.get("/validate", (req, res) => {
+
+app.get("/validate", async (req, res) => {
   const key = req.query.key;
 
   if (!key) return res.json({ valid: false });
 
-  const lic = licenses[key];
+  const lic = await getLicense(key);
   if (!lic) return res.json({ valid: false });
 
   if (Date.now() > lic.expires) return res.json({ valid: false });
 
-  return res.json({
+  res.json({
     valid: true,
     player: lic.player,
     expires: lic.expires
@@ -151,8 +214,9 @@ app.get("/validate", (req, res) => {
 });
 
 // ----------------------------------------------------------
-// SERVER START
+//  START SERVER
 // ----------------------------------------------------------
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("🚀 License server running on port", PORT);
