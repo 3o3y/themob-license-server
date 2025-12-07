@@ -104,7 +104,7 @@ app.post("/tebex", async (req, res) => {
     // ------------------------------------------------------
     //   NUR „The Mob“ soll eine Lizenz erzeugen
     // ------------------------------------------------------
-    if (packageId !== TARGET_PACKAGE_ID) {
+    if (packageId !== 7156613) {
       console.log("⚠ Anderes Paket – kein Lizenzkey wird erstellt.");
       return res.json({ id: id, ignored: true });
     }
