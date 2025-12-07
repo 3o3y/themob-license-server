@@ -81,23 +81,17 @@ app.post("/tebex", async (req, res) => {
   const id   = body.id   || null;
   const type = body.type || "unknown";
 
-  // ------------------------------------------------------
-  // 1) WEBHOOK VALIDATION
-  // ------------------------------------------------------
+  // VALIDATION
   if (type === "validation.webhook") {
     console.log("✅ Validation Webhook bestätigt:", id);
     return res.json({ id: id });
   }
 
-  // ------------------------------------------------------
-  // 2) PAYMENT COMPLETED
-  // ------------------------------------------------------
+  // PAYMENT COMPLETED
   if (type === "payment.completed") {
 
     const subject  = body.subject  || {};
     const customer = subject.customer || {};
-
-    // WICHTIG: Produkte kommen aus subject.products[]
     const products = subject.products || [];
     const product  = products[0] || {};
 
@@ -106,23 +100,18 @@ app.post("/tebex", async (req, res) => {
 
     console.log("📦 Paket gekauft:", packageId, packageName);
 
-    // Nur unser Paket erlaubt
     if (packageId !== 7156613) {
       console.log("⚠ Fremdes Paket – kein Lizenzkey erzeugt.");
       return res.json({ id: id, ignored: true });
     }
 
-    // Käuferdaten
     const usernameObj = customer.username || {};
     const playerName  = usernameObj.username || "unknown";
     const email       = customer.email || null;
 
-    // Lizenzkey generieren
-    const key         = crypto.randomBytes(16).toString("hex");
-    const durationDay = 30;
-    const expires     = Date.now() + durationDay * 24 * 60 * 60 * 1000;
+    const key     = crypto.randomBytes(16).toString("hex");
+    const expires = Date.now() + 30 * 24 * 60 * 60 * 1000;
 
-    // Speichern
     licenses[key] = {
       expires,
       player: playerName,
@@ -133,15 +122,8 @@ app.post("/tebex", async (req, res) => {
     console.log("💎 Neue Lizenz erstellt:", key);
     console.log("📧 Käufer-Email:", email);
 
-    // Email direkt senden
-    if (email) {
-      await sendLicenseEmail(email, key);
-    } else {
-      console.log("⚠ Käufer hat keine Email – keine Nachricht möglich.");
-    }
-
-    // Antwort an Tebex
-    return res.json({
+    // 👉 Erst Tebex antworten, DANN Email senden
+    res.json({
       id: id,
       success: true,
       note: `Your Premium License Key: ${key}`,
@@ -149,10 +131,18 @@ app.post("/tebex", async (req, res) => {
       player: playerName,
       expires
     });
+
+    // Email im Hintergrund senden
+    if (email) {
+      sendLicenseEmail(email, key)
+        .then(() => console.log("📧 Email sent asynchronously"))
+        .catch(err => console.error("❌ Email async failed:", err));
+    }
+
+    return;
   }
 
-  console.log("ℹ Unbekannter Webhook-Typ:", type);
-  return res.json({ id: id, received: true });
+  res.json({ id: id, received: true });
 });
 
 // ----------------------------------------------------------
