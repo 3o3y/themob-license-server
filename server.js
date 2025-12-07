@@ -37,15 +37,11 @@ app.post("/tebex", (req, res) => {
   const id = body.id || null;
   const type = body.type || "unknown";
 
-  // 1) VALIDATION WEBHOOK
-  // Tebex prüft damit einmalig, ob dein Endpoint "lebt"
   if (type === "validation.webhook") {
     console.log("✅ Validation Webhook erhalten:", id);
-    // Tebex erwartet GENAU dieses JSON zurück: { "id": "<id>" }
     return res.json({ id: id });
   }
 
-  // 2) PAYMENT WEBHOOK (z.B. payment.completed)
   if (type === "payment.completed") {
 
     const subject = body.subject || {};
@@ -54,36 +50,30 @@ app.post("/tebex", (req, res) => {
 
     const playerName = usernameObj.username || "unknown";
 
-    // Dauer der Premium-Lizenz (Tage)
     const durationDays = 30;
-
-    // Zufälliger Lizenz-Key
     const key = crypto.randomBytes(16).toString("hex");
     const expires = Date.now() + durationDays * 24 * 60 * 60 * 1000;
 
-    // Lizenz speichern
     licenses[key] = {
       expires,
       player: playerName,
       created: Date.now()
     };
 
-    console.log("💎 Neue Premium-Lizenz erstellt:");
-    console.log("   Key:     ", key);
-    console.log("   Player:  ", playerName);
-    console.log("   Expires: ", new Date(expires).toISOString());
+    console.log("💎 Neue Premium-Lizenz erstellt:", key);
 
-    // Antwort an Tebex
-    // → In der E-Mail-Template kannst du z.B. {{ response.license }} verwenden
     return res.json({
       id: id,
       success: true,
+
+      // 👇 Käufer sieht es in der Email + Checkout-Seite
+      note: `Your Premium License Key: ${key}`,
+
       license: key,
       player: playerName,
       expires
     });
   }
-
   // Unbekannter Webhook-Typ
   console.log("ℹ Unbehandelter Webhook-Typ:", type);
   return res.json({ id: id, received: true });
