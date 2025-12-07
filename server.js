@@ -28,22 +28,23 @@ let licenses = {};
 // { key: { expires, player, email, created } }
 
 // ----------------------------------------------------------
-//  EMAIL SENDER – GMX SMTP
+//  EMAIL SENDER – GMail SMTP
 // ----------------------------------------------------------
 async function sendLicenseEmail(to, key) {
   try {
     let transporter = nodemailer.createTransport({
-      host: "mail.gmx.net",
+      host: "smtp.gmail.com",
       port: 587,
       secure: false,
       auth: {
-        user: "3o3y@gmx.net",      // <<< deine GMX-Adresse
-        pass: "Alpha8408?!"        // <<< dein GMX-Passwort
+        user: "3o3y87@gmail.com",
+        pass: "hyax xjsj lvpi wryw"
       }
+
     });
 
     let msg = {
-      from: '"TheMob Store" <3o3y@gmx.net>',
+      from: '"TheMob Store" <3o3y87@gmail.com>',
       to: to,
       subject: "Your TheMob License Key",
       html: `
