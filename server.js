@@ -6,7 +6,7 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const cors = require("cors");
 const crypto = require("crypto");
-const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
 
 const app = express();
 
@@ -40,7 +40,6 @@ async function sendLicenseEmail(to, key) {
         user: "3o3y87@gmail.com",
         pass: "hyax xjsj lvpi wryw"
       }
-
     });
 
     let msg = {
