@@ -19,25 +19,28 @@ app.get("/", (req, res) => {
 
 
 // ======================================================
-// 1) TEBEX VALIDATION ENDPOINT (MUST EXIST!)
-// Tebex calls this BEFORE accepting any webhook.
-// If this endpoint does not return 200 → Webhook FAILS
+// 1) TEBEX VALIDATION ENDPOINT (MUST RETURN 200)
+// Tebex calls *GET* first, before accepting the webhook!
 // ======================================================
+app.get("/tebex", (req, res) => {
+    console.log("✔ GET Tebex Validation Ping");
+    res.status(200).json({ status: "ok" });
+});
+
+// Backup for Tebex POST validation (some stores use POST)
 app.post("/tebex", (req, res) => {
-    console.log("✔ Tebex Validation Webhook Ping Received");
-    res.status(200).json({ ok: true });
+    console.log("✔ POST Tebex Validation Ping");
+    res.status(200).json({ status: "ok" });
 });
 
 
 // ======================================================
-// 2) TEBEX PAYMENT WEBHOOK (transaction.completed)
-// This is triggered when the purchase succeeds
+// 2) PAYMENT WEBHOOK (transaction.completed)
 // ======================================================
 app.post("/tebex/webhook", (req, res) => {
 
     console.log("📬 Tebex Webhook Received:", JSON.stringify(req.body, null, 2));
 
-    // Tebex Checkout sends: type = "transaction.completed"
     if (!req.body || req.body.type !== "transaction.completed") {
         return res.status(400).json({ error: "Not a transaction.completed event" });
     }
@@ -49,10 +52,7 @@ app.post("/tebex/webhook", (req, res) => {
 
     const playerName = tx.user?.username || "unknown";
 
-    // Default duration: 30 days
-    const durationDays = 30;
-
-    // Generate license key
+    const durationDays = 30; // Premium duration
     const key = crypto.randomBytes(16).toString("hex");
     const expires = Date.now() + durationDays * 24 * 60 * 60 * 1000;
 
@@ -62,11 +62,10 @@ app.post("/tebex/webhook", (req, res) => {
         created: Date.now()
     };
 
-    console.log("✅ Created Premium License:", key);
+    console.log("✅ Created License:", key);
     console.log("⏳ Expires:", new Date(expires).toISOString());
     console.log("👤 Player:", playerName);
 
-    // Send response back to Tebex
     res.json({
         success: true,
         license: key,
@@ -78,7 +77,6 @@ app.post("/tebex/webhook", (req, res) => {
 
 // ======================================================
 // 3) PLUGIN LICENSE VALIDATION ENDPOINT
-// Java plugin: GET /validate?key=XXXX
 // ======================================================
 app.get("/validate", (req, res) => {
     const key = req.query.key;
@@ -88,12 +86,9 @@ app.get("/validate", (req, res) => {
     const license = licenses[key];
     if (!license) return res.json({ valid: false });
 
-    // Expired?
-    if (Date.now() > license.expires) {
+    if (Date.now() > license.expires)
         return res.json({ valid: false });
-    }
 
-    // License valid
     return res.json({
         valid: true,
         player: license.player,
@@ -102,8 +97,6 @@ app.get("/validate", (req, res) => {
 });
 
 
-// ======================================================
-// START SERVER
 // ======================================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
