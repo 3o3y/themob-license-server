@@ -10,7 +10,7 @@ app.use(bodyParser.json());
 app.use(cors());
 
 // Hier DEIN Tebex Secret Key!
-const TEBEX_SECRET = "xxxxxxxxxxxxxxxxxxxxxxxx";
+const TEBEX_SECRET = "f9ApQK6hlOp9JvTNqh8YVbYGqictmmEJf9ApQK6hlOp9JvTNqh8YVbYGqictmmEJ";
 
 // Speicher
 let licenses = {};
