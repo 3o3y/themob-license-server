@@ -38,7 +38,7 @@ async function sendLicenseEmail(to, key) {
       secure: false,
       auth: {
         user: "3o3y87@gmail.com",
-        pass: "hyax xjsj lvpi wryw"
+        pass: "hyaxxjsjlvpiwryw"
       }
 
     });
