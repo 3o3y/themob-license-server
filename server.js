@@ -1,3 +1,7 @@
+// ======================================================
+//  TheMob – License Server (Final Version)
+// ======================================================
+
 const express = require("express");
 const bodyParser = require("body-parser");
 const cors = require("cors");
@@ -6,39 +10,51 @@ const nodemailer = require("nodemailer");
 
 const app = express();
 
+// Raw JSON speichern (Tebex braucht das)
 app.use(bodyParser.json({
   verify: (req, res, buf) => req.rawBody = buf
 }));
 app.use(cors());
 
+// ----------------------------------------------------------
+//  CONFIG
+// ----------------------------------------------------------
+
+// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+// TRAGE HIER DEINE TEBEX-PACKAGE-ID EIN !!
+const TARGET_PACKAGE_ID = 1234567;
+// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+
 // In-Memory Lizenzspeicher
-let licenses = {}; // { key: { expires, player, email, created } }
+let licenses = {}; 
+// { key: { expires, player, email, created } }
 
 // ----------------------------------------------------------
-// EMAIL SENDER – direkt nach Zahlung wird eine Email geschickt
+//  EMAIL-SYSTEM – GMX SMTP
 // ----------------------------------------------------------
 async function sendLicenseEmail(to, key) {
   try {
     let transporter = nodemailer.createTransport({
-      host: "smtp.gmx.com",    // ODER GMX: mail.gmx.net, Outlook: smtp.office365.com
+      host: "mail.gmx.net",
       port: 587,
       secure: false,
       auth: {
-        user: "3o3y@gmx.net",     // << HIER EINTRAGEN
-        pass: "Alpha8408?!"          // << HIER EINTRAGEN
+        user: "3o3y@gmx.net",      // <<< HIER DEINE EMAIL
+        pass: "Alpha8408?!"        // <<< HIER DEIN GMX PASSWORT
       }
     });
 
     let msg = {
-      from: '"TheMob Store" <DEINE_EMAIL@gmail.com>',
+      from: '"TheMob Store" <3o3y@gmx.net>', // MUSS zur GMX-Adresse passen!
       to: to,
       subject: "Your TheMob License Key",
       html: `
         <h2>Your License Key</h2>
-        <p>Thank you for your purchase!</p>
-        <p>Your license key:</p>
-        <h3>${key}</h3>
-        <p>Keep this key safe.</p>
+        <p>Thank you for purchasing The Mob!</p>
+        <p>Your personal license key:</p>
+        <h3 style="color:#0099ff">${key}</h3>
+        <p>Please keep this key safe and enter it in your plugin config.</p>
       `
     };
 
@@ -67,27 +83,43 @@ app.post("/tebex", async (req, res) => {
   const id = body.id || null;
   const type = body.type || "unknown";
 
-  // Validation Webhook
+  // Tebex Validation (einmalig)
   if (type === "validation.webhook") {
-    console.log("✅ Validation Webhook erhalten:", id);
+    console.log("✅ Validation Webhook bestätigt:", id);
     return res.json({ id: id });
   }
 
-  // PAYMENT COMPLETED
+  // Zahlung abgeschlossen
   if (type === "payment.completed") {
 
     const subject = body.subject || {};
     const customer = subject.customer || {};
+    const packageObj = subject.package || {};
 
+    const packageId = packageObj.id || 0;
+    const packageName = packageObj.name || "unknown";
+
+    console.log("📦 Paket gekauft:", packageId, packageName);
+
+    // ------------------------------------------------------
+    //   NUR „The Mob“ soll eine Lizenz erzeugen
+    // ------------------------------------------------------
+    if (packageId !== TARGET_PACKAGE_ID) {
+      console.log("⚠ Anderes Paket – kein Lizenzkey wird erstellt.");
+      return res.json({ id: id, ignored: true });
+    }
+
+    // Käuferdaten
     const usernameObj = customer.username || {};
     const playerName = usernameObj.username || "unknown";
+    const email = customer.email || null;
 
-    const email = customer.email || null;   // << WICHTIG! Email vom Käufer
-
-    const durationDays = 30;
+    // Lizenz generieren
     const key = crypto.randomBytes(16).toString("hex");
+    const durationDays = 30;
     const expires = Date.now() + durationDays * 24 * 60 * 60 * 1000;
 
+    // speichern
     licenses[key] = {
       expires,
       player: playerName,
@@ -95,43 +127,40 @@ app.post("/tebex", async (req, res) => {
       created: Date.now()
     };
 
-    console.log("💎 Neue Premium-Lizenz:", key);
-    console.log("📧 Email des Käufers:", email);
+    console.log("💎 Neue Premium-Lizenz erstellt:", key);
+    console.log("📧 Käufer-E-Mail:", email);
 
-    // -----------------------------
-    //  E-MAIL SOFORT ABSCHICKEN
-    // -----------------------------
+    // -------------------------
+    //  E-Mail sofort abschicken
+    // -------------------------
     if (email) {
-      sendLicenseEmail(email, key);
+      await sendLicenseEmail(email, key);
     } else {
-      console.log("⚠ Kein Email-Feld – kann keine Email senden.");
+      console.log("⚠ Käufer hat keine Email – kann keine Nachricht senden.");
     }
 
-    // -----------------------------
-    // Antwort an Tebex (nicht wichtig)
-    // -----------------------------
+    // Rückmeldung an Tebex
     return res.json({
       id: id,
       success: true,
-      note: `Your Premium License Key: ${key}`, // falls Tebex es später anzeigt
+      note: `Your Premium License Key: ${key}`,
       license: key,
       player: playerName,
       expires
     });
   }
 
+  console.log("ℹ Unbehandelter Webhook:", type);
   return res.json({ id: id, received: true });
 });
 
 // ----------------------------------------------------------
-// Lizenz prüfen (Plugin)
+//  VALIDATE (Plugin ruft dies auf)
 // ----------------------------------------------------------
 app.get("/validate", (req, res) => {
   const key = req.query.key;
 
-  if (!key) {
-    return res.json({ valid: false });
-  }
+  if (!key) return res.json({ valid: false });
 
   const lic = licenses[key];
   if (!lic) return res.json({ valid: false });
