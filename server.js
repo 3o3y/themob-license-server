@@ -7,37 +7,35 @@ const app = express();
 app.use(bodyParser.json());
 app.use(cors());
 
-// In-Memory Licensing (Render FREE TIER friendly)
-let licenses = {};
+let licenses = {}; // Memory-Storage
 
 // ======================================================
-// Root
+// Root Endpoint
 // ======================================================
 app.get("/", (req, res) => {
-    res.send("TheMob License Server is running with Tebex Webhooks.");
+    res.send("TheMob License Server running with Tebex Checkout Webhooks.");
 });
 
 // ======================================================
-// 1) Tebex Webhook → kauft Premium-Lizenz
+// Tebex Webhook Endpoint
 // ======================================================
 app.post("/tebex/webhook", (req, res) => {
 
     console.log("📬 Tebex Webhook Received:", req.body);
 
-    // Prüfen ob es ein Payment war
-    if (!req.body || req.body.type !== "payment.completed") {
-        return res.status(400).json({ error: "Invalid event type" });
+    if (!req.body || req.body.type !== "transaction.completed") {
+        return res.status(400).json({ error: "Not a transaction.completed event" });
     }
 
-    const purchase = req.body.data;
-    if (!purchase) return res.status(400).json({ error: "Missing data" });
+    const tx = req.body.data?.transaction;
+    if (!tx) return res.status(400).json({ error: "Missing transaction data" });
 
-    const playerName = purchase.player ? purchase.player.username : "unknown";
-    const durationDays = 30; // Standard: 30 Tage Premium
+    const playerName = tx.user?.username || "unknown";
 
-    // 🔥 License Key generieren
+    // Dauer: 30 Tage Premium
+    const durationDays = 30;
+
     const key = crypto.randomBytes(16).toString("hex");
-
     const expires = Date.now() + durationDays * 24 * 60 * 60 * 1000;
 
     licenses[key] = {
@@ -46,41 +44,37 @@ app.post("/tebex/webhook", (req, res) => {
         created: Date.now()
     };
 
-    console.log("✅ Created Premium License:", key, "expires:", new Date(expires));
+    console.log("✅ Premium License Created:", key, "expires:", new Date(expires));
 
-    // ➜ Optional: Zeige dem Spieler seinen Key im Tebex-Panel
+    // Antwort an Tebex
     res.json({
         success: true,
         license: key,
+        player: playerName,
         expires
     });
 });
 
 // ======================================================
-// 2) Plugin → Lizenz prüfen
+// Validate License (Plugin calls this)
 // ======================================================
 app.get("/validate", (req, res) => {
-
     const key = req.query.key;
     if (!key) return res.status(400).json({ valid: false });
 
     const lic = licenses[key];
     if (!lic) return res.json({ valid: false });
 
-    // Abgelaufen?
-    if (Date.now() > lic.expires) {
+    if (Date.now() > lic.expires)
         return res.json({ valid: false });
-    }
 
     return res.json({
         valid: true,
-        expires: lic.expires,
-        player: lic.player
+        player: lic.player,
+        expires: lic.expires
     });
 });
 
-// ======================================================
-// PORT
 // ======================================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
