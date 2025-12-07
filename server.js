@@ -65,7 +65,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 async function sendLicenseEmail(to, key) {
   try {
     await resend.emails.send({
-      from: "TheMob Store <noreply@themob.store>",
+      from: "TheMob Store <noreply@resend.dev>",
       to,
       subject: "Your TheMob License Key",
       html: `
