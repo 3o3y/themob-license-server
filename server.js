@@ -1,104 +1,108 @@
+// server.js
 const express = require("express");
 const bodyParser = require("body-parser");
 const cors = require("cors");
 const crypto = require("crypto");
 
 const app = express();
-app.use(bodyParser.json());
+
+// wichtig: rohen Body behalten (für spätere Signature-Checks)
+app.use(bodyParser.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 app.use(cors());
 
-// Temporary storage – good enough for Render Free Tier
-let licenses = {};
+let licenses = {}; // { key: { expires, player } }
 
 // ======================================================
-// ROOT ENDPOINT (For debugging on Render)
+// ROOT – zum Testen im Browser
 // ======================================================
 app.get("/", (req, res) => {
-    res.send("TheMob License Server is running ✔");
+  res.send("TheMob License Server is running.");
 });
 
-
 // ======================================================
-// 1) TEBEX VALIDATION ENDPOINT (MUST RETURN 200)
-// Tebex calls *GET* first, before accepting the webhook!
+// 1) TEBEX WEBHOOK: https://.../tebex
+//    → in Tebex als Endpoint eintragen
 // ======================================================
-app.get("/tebex", (req, res) => {
-    console.log("✔ GET Tebex Validation Ping");
-    res.status(200).json({ status: "ok" });
-});
-
-// Backup for Tebex POST validation (some stores use POST)
 app.post("/tebex", (req, res) => {
-    console.log("✔ POST Tebex Validation Ping");
-    res.status(200).json({ status: "ok" });
-});
+  console.log("📬 Tebex Webhook:", req.body);
 
+  const body = req.body || {};
+  const id = body.id || null;
+  const type = body.type || "unknown";
 
-// ======================================================
-// 2) PAYMENT WEBHOOK (transaction.completed)
-// ======================================================
-app.post("/tebex/webhook", (req, res) => {
+  // 1) VALIDATION WEBHOOK
+  // --------------------------------------------------
+  if (type === "validation.webhook") {
+    console.log("✅ Validation Webhook erhalten:", id);
+    // Tebex erwartet GENAU dieses JSON
+    return res.json({ id: id });
+  }
 
-    console.log("📬 Tebex Webhook Received:", JSON.stringify(req.body, null, 2));
+  // 2) PAYMENT WEBHOOK (z.B. payment.completed)
+  // --------------------------------------------------
+  if (type === "payment.completed") {
+    const subject = body.subject || {};
+    const customer = subject.customer || {};
+    const usernameObj = customer.username || {};
 
-    if (!req.body || req.body.type !== "transaction.completed") {
-        return res.status(400).json({ error: "Not a transaction.completed event" });
-    }
+    const playerName = usernameObj.username || "unknown";
 
-    const tx = req.body.data?.transaction;
-    if (!tx) {
-        return res.status(400).json({ error: "Missing transaction data" });
-    }
-
-    const playerName = tx.user?.username || "unknown";
-
-    const durationDays = 30; // Premium duration
+    // 30 Tage Premium
+    const durationDays = 30;
     const key = crypto.randomBytes(16).toString("hex");
     const expires = Date.now() + durationDays * 24 * 60 * 60 * 1000;
 
     licenses[key] = {
-        expires,
-        player: playerName,
-        created: Date.now()
+      expires,
+      player: playerName,
+      created: Date.now()
     };
 
-    console.log("✅ Created License:", key);
-    console.log("⏳ Expires:", new Date(expires).toISOString());
-    console.log("👤 Player:", playerName);
+    console.log("💎 Neue Premium-Lizenz:", key, "Player:", playerName, "Expires:", new Date(expires));
 
-    res.json({
-        success: true,
-        license: key,
-        expires,
-        player: playerName
+    // Antwort an Tebex – kann alles sein, 2xx reicht
+    return res.json({
+      id: id,
+      success: true,
+      license: key,
+      player: playerName,
+      expires
     });
+  }
+
+  // Fallback: unbekannter Typ
+  console.log("ℹ Unbehandelter Webhook-Typ:", type);
+  return res.json({ id: id, received: true });
 });
 
-
 // ======================================================
-// 3) PLUGIN LICENSE VALIDATION ENDPOINT
+// 2) VALIDATE – vom Minecraft-Plugin aufgerufen
+//    GET https://.../validate?key=XXXX
 // ======================================================
 app.get("/validate", (req, res) => {
-    const key = req.query.key;
+  const key = req.query.key;
+  if (!key) return res.json({ valid: false });
 
-    if (!key) return res.status(400).json({ valid: false });
+  const lic = licenses[key];
+  if (!lic) return res.json({ valid: false });
 
-    const license = licenses[key];
-    if (!license) return res.json({ valid: false });
+  if (Date.now() > lic.expires) {
+    return res.json({ valid: false });
+  }
 
-    if (Date.now() > license.expires)
-        return res.json({ valid: false });
-
-    return res.json({
-        valid: true,
-        player: license.player,
-        expires: license.expires
-    });
+  return res.json({
+    valid: true,
+    player: lic.player,
+    expires: lic.expires
+  });
 });
-
 
 // ======================================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log("🚀 License server running on port", PORT);
+  console.log("🚀 License server running on port", PORT);
 });
