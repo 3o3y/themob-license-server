@@ -6,7 +6,7 @@ const crypto = require("crypto");
 
 const app = express();
 
-// wichtig: rohen Body behalten (für spätere Signature-Checks)
+// Body als JSON parsen + rohen Body behalten (falls du später Signaturen prüfen willst)
 app.use(bodyParser.json({
   verify: (req, res, buf) => {
     req.rawBody = buf;
@@ -14,7 +14,10 @@ app.use(bodyParser.json({
 }));
 app.use(cors());
 
-let licenses = {}; // { key: { expires, player } }
+// In-Memory Lizenzspeicher
+// ACHTUNG: Bei Render Free-Tier gehen diese Daten bei jedem Neustart verloren.
+// Für echte Produktion später z.B. eine kleine DB (SQLite, Mongo, etc.) nutzen.
+let licenses = {}; // { key: { expires, player, created } }
 
 // ======================================================
 // ROOT – zum Testen im Browser
@@ -24,47 +27,54 @@ app.get("/", (req, res) => {
 });
 
 // ======================================================
-// 1) TEBEX WEBHOOK: https://.../tebex
-//    → in Tebex als Endpoint eintragen
+// 1) TEBEX WEBHOOK: POST https://<dein-render>.onrender.com/tebex
+//    → in Tebex als Checkout Webhook Endpoint eintragen
 // ======================================================
 app.post("/tebex", (req, res) => {
-  console.log("📬 Tebex Webhook:", req.body);
+  console.log("📬 Tebex Webhook:", JSON.stringify(req.body, null, 2));
 
   const body = req.body || {};
   const id = body.id || null;
   const type = body.type || "unknown";
 
   // 1) VALIDATION WEBHOOK
-  // --------------------------------------------------
+  // Tebex prüft damit einmalig, ob dein Endpoint "lebt"
   if (type === "validation.webhook") {
     console.log("✅ Validation Webhook erhalten:", id);
-    // Tebex erwartet GENAU dieses JSON
+    // Tebex erwartet GENAU dieses JSON zurück: { "id": "<id>" }
     return res.json({ id: id });
   }
 
   // 2) PAYMENT WEBHOOK (z.B. payment.completed)
-  // --------------------------------------------------
   if (type === "payment.completed") {
+
     const subject = body.subject || {};
     const customer = subject.customer || {};
     const usernameObj = customer.username || {};
 
     const playerName = usernameObj.username || "unknown";
 
-    // 30 Tage Premium
+    // Dauer der Premium-Lizenz (Tage)
     const durationDays = 30;
+
+    // Zufälliger Lizenz-Key
     const key = crypto.randomBytes(16).toString("hex");
     const expires = Date.now() + durationDays * 24 * 60 * 60 * 1000;
 
+    // Lizenz speichern
     licenses[key] = {
       expires,
       player: playerName,
       created: Date.now()
     };
 
-    console.log("💎 Neue Premium-Lizenz:", key, "Player:", playerName, "Expires:", new Date(expires));
+    console.log("💎 Neue Premium-Lizenz erstellt:");
+    console.log("   Key:     ", key);
+    console.log("   Player:  ", playerName);
+    console.log("   Expires: ", new Date(expires).toISOString());
 
-    // Antwort an Tebex – kann alles sein, 2xx reicht
+    // Antwort an Tebex
+    // → In der E-Mail-Template kannst du z.B. {{ response.license }} verwenden
     return res.json({
       id: id,
       success: true,
@@ -74,26 +84,36 @@ app.post("/tebex", (req, res) => {
     });
   }
 
-  // Fallback: unbekannter Typ
+  // Unbekannter Webhook-Typ
   console.log("ℹ Unbehandelter Webhook-Typ:", type);
   return res.json({ id: id, received: true });
 });
 
 // ======================================================
 // 2) VALIDATE – vom Minecraft-Plugin aufgerufen
-//    GET https://.../validate?key=XXXX
+//    GET https://<dein-render>.onrender.com/validate?key=XXXX
 // ======================================================
 app.get("/validate", (req, res) => {
   const key = req.query.key;
-  if (!key) return res.json({ valid: false });
 
-  const lic = licenses[key];
-  if (!lic) return res.json({ valid: false });
-
-  if (Date.now() > lic.expires) {
+  if (!key) {
+    console.log("❌ Validate ohne Key aufgerufen.");
     return res.json({ valid: false });
   }
 
+  const lic = licenses[key];
+  if (!lic) {
+    console.log("❌ Unknown license key:", key);
+    return res.json({ valid: false });
+  }
+
+  // Abgelaufen?
+  if (Date.now() > lic.expires) {
+    console.log("⌛ License expired:", key);
+    return res.json({ valid: false });
+  }
+
+  console.log("✅ License valid:", key, "Player:", lic.player);
   return res.json({
     valid: true,
     player: lic.player,
@@ -101,6 +121,8 @@ app.get("/validate", (req, res) => {
   });
 });
 
+// ======================================================
+// SERVER STARTEN
 // ======================================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
