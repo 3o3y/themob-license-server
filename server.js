@@ -1,5 +1,5 @@
 // ======================================================
-//  TheMob – License Server (Final Version, FIXED)
+//  TheMob – License Server (Final Version, RESEND)
 // ======================================================
 
 const express = require("express");
@@ -20,46 +20,36 @@ app.use(cors());
 //  CONFIG
 // ----------------------------------------------------------
 
-// ✔️ DIE KORREKTE TEBEX PRODUCT ID
 const TARGET_PACKAGE_ID = 7156613;
 
 // In-Memory Lizenzspeicher
 let licenses = {}; 
-// { key: { expires, player, email, created } }
 
 // ----------------------------------------------------------
-//  EMAIL SENDER – GMail SMTP
+//  EMAIL SENDER – RESEND
 // ----------------------------------------------------------
+
+const resend = new Resend(process.env.RESEND_API_KEY);
+
 async function sendLicenseEmail(to, key) {
   try {
-    let transporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 587,
-      secure: false,
-      auth: {
-        user: "3o3y87@gmail.com",
-        pass: "hyax xjsj lvpi wryw"
-      }
-    });
-
-    let msg = {
-      from: '"TheMob Store" <3o3y87@gmail.com>',
-      to: to,
+    await resend.emails.send({
+      from: "TheMob Store <noreply@themob.store>",
+      to,
       subject: "Your TheMob License Key",
       html: `
         <h2>Your License Key</h2>
         <p>Thank you for purchasing The Mob!</p>
         <p>Your personal license key:</p>
         <h3 style="color:#0099ff">${key}</h3>
-        <p>Please keep this key safe and enter it in your plugin config.</p>
+        <p>Please keep this key safe.</p>
       `
-    };
+    });
 
-    await transporter.sendMail(msg);
     console.log("📧 Email sent to:", to);
 
   } catch (err) {
-    console.error("❌ Email sending failed:", err);
+    console.error("❌ Email sending failed (Resend):", err);
   }
 }
 
@@ -80,13 +70,11 @@ app.post("/tebex", async (req, res) => {
   const id   = body.id   || null;
   const type = body.type || "unknown";
 
-  // VALIDATION
   if (type === "validation.webhook") {
     console.log("✅ Validation Webhook bestätigt:", id);
     return res.json({ id: id });
   }
 
-  // PAYMENT COMPLETED
   if (type === "payment.completed") {
 
     const subject  = body.subject  || {};
@@ -94,21 +82,19 @@ app.post("/tebex", async (req, res) => {
     const products = subject.products || [];
     const product  = products[0] || {};
 
-    const packageId   = product.id   || 0;
-    const packageName = product.name || "unknown";
+    const packageId = product.id || 0;
 
-    console.log("📦 Paket gekauft:", packageId, packageName);
+    console.log("📦 Paket gekauft:", packageId);
 
-    if (packageId !== 7156613) {
+    if (packageId !== TARGET_PACKAGE_ID) {
       console.log("⚠ Fremdes Paket – kein Lizenzkey erzeugt.");
-      return res.json({ id: id, ignored: true });
+      return res.json({ id, ignored: true });
     }
 
-    const usernameObj = customer.username || {};
-    const playerName  = usernameObj.username || "unknown";
-    const email       = customer.email || null;
+    const playerName = customer?.username?.username || "unknown";
+    const email      = customer?.email || null;
 
-    const key     = crypto.randomBytes(16).toString("hex");
+    const key = crypto.randomBytes(16).toString("hex");
     const expires = Date.now() + 30 * 24 * 60 * 60 * 1000;
 
     licenses[key] = {
@@ -121,9 +107,9 @@ app.post("/tebex", async (req, res) => {
     console.log("💎 Neue Lizenz erstellt:", key);
     console.log("📧 Käufer-Email:", email);
 
-    // 👉 Erst Tebex antworten, DANN Email senden
+    // Erst an Tebex antworten
     res.json({
-      id: id,
+      id,
       success: true,
       note: `Your Premium License Key: ${key}`,
       license: key,
@@ -131,21 +117,21 @@ app.post("/tebex", async (req, res) => {
       expires
     });
 
-    // Email im Hintergrund senden
+    // Email senden (async)
     if (email) {
       sendLicenseEmail(email, key)
         .then(() => console.log("📧 Email sent asynchronously"))
-        .catch(err => console.error("❌ Email async failed:", err));
+        .catch(err => console.error("❌ Async email error:", err));
     }
 
     return;
   }
 
-  res.json({ id: id, received: true });
+  res.json({ id, received: true });
 });
 
 // ----------------------------------------------------------
-//  VALIDATE ENDPOINT (für dein Minecraft Plugin)
+//  VALIDATE ENDPOINT
 // ----------------------------------------------------------
 app.get("/validate", (req, res) => {
   const key = req.query.key;
