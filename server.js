@@ -1,5 +1,5 @@
 // ======================================================
-//  TheMob – License Server (MySQL + RESEND Version)
+//  TheMob – License Server (MySQL + RESEND + SIGNED KEYS)
 // ======================================================
 
 const express = require("express");
@@ -8,6 +8,7 @@ const cors = require("cors");
 const crypto = require("crypto");
 const { Resend } = require("resend");
 const mysql = require("mysql2/promise");
+const jwt = require("jsonwebtoken");
 
 const app = express();
 
@@ -18,14 +19,31 @@ app.use(bodyParser.json({
 app.use(cors());
 
 // ----------------------------------------------------------
+//  ENV CHECKS
+// ----------------------------------------------------------
+
+if (!process.env.MYSQL_HOST ||
+    !process.env.MYSQL_USER ||
+    !process.env.MYSQL_PASS ||
+    !process.env.MYSQL_DB) {
+  console.warn("⚠ MYSQL ENV Variablen sind nicht vollständig gesetzt!");
+}
+
+if (!process.env.LICENSE_SECRET) {
+  console.warn("⚠ LICENSE_SECRET ist nicht gesetzt! Signierte Keys sind dann unsicher.");
+}
+
+const LICENSE_SECRET = process.env.LICENSE_SECRET || "CHANGE_ME_NOW_IN_PRODUCTION";
+
+// ----------------------------------------------------------
 //  MYSQL CONNECTION (POOL – STABIL FÜR G-PORTAL)
 // ----------------------------------------------------------
 
 const db = mysql.createPool({
-  host: process.env.MYSQL_HOST,     // db2.sql.g-portal.com
-  user: process.env.MYSQL_USER,     // db_17972439_1
-  password: process.env.MYSQL_PASS, // ***
-  database: process.env.MYSQL_DB,   // db_17972439_1
+  host: process.env.MYSQL_HOST,     // z.B. db2.sql.g-portal.com
+  user: process.env.MYSQL_USER,
+  password: process.env.MYSQL_PASS,
+  database: process.env.MYSQL_DB,
   port: 3306,
   waitForConnections: true,
   connectionLimit: 10,
@@ -41,24 +59,30 @@ db.getConnection()
   .catch(err => {
     console.error("❌ MySQL Pool Fehler:", err);
   });
+
 // ----------------------------------------------------------
 //  RESEND EMAIL SENDER
 // ----------------------------------------------------------
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-async function sendLicenseEmail(to, key) {
+async function sendLicenseEmail(to, key, expires) {
   try {
+    const expiresDate = new Date(expires).toUTCString();
+
     await resend.emails.send({
       from: "TheMob Store <noreply@resend.dev>",
       to,
       subject: "Your TheMob License Key",
       html: `
         <h2>Your License Key</h2>
-        <p>Thank you for purchasing The Mob!</p>
+        <p>Thank you for purchasing <b>The Mob</b>!</p>
         <p>Your personal license key:</p>
-        <h3 style="color:#0099ff">${key}</h3>
-        <p>Please keep this key safe.</p>
+        <pre style="font-size:14px;background:#111;color:#0f0;padding:10px;border-radius:6px;white-space:pre-wrap;word-wrap:break-word;">
+${key}
+        </pre>
+        <p><b>Expires:</b> ${expiresDate}</p>
+        <p>Please keep this key safe and do not share it.</p>
       `
     });
 
@@ -111,14 +135,14 @@ async function getLicense(key) {
 // ----------------------------------------------------------
 
 app.get("/", (req, res) => {
-  res.send("TheMob License Server is running (MySQL mode).");
+  res.send("TheMob License Server is running (MySQL + Signed Keys).");
 });
 
 // ----------------------------------------------------------
 //  TEBEX WEBHOOK HANDLER
 // ----------------------------------------------------------
 
-const TARGET_PACKAGE_ID = 7156613;
+const TARGET_PACKAGE_ID = 7156613; // dein Tebex-Paket
 
 app.post("/tebex", async (req, res) => {
   console.log("📬 Tebex Webhook:", JSON.stringify(req.body, null, 2));
@@ -146,26 +170,45 @@ app.post("/tebex", async (req, res) => {
     const player = customer?.username?.username || "unknown";
     const email = customer?.email || null;
 
-    const key = crypto.randomBytes(16).toString("hex");
-    const expires = Date.now() + 30 * 24 * 60 * 60 * 1000;
+    // ======================================================
+    //  SIGNIERTER LIZENZ-SCHLÜSSEL (JWT)
+    // ======================================================
+    // Payload: Spieler, Produkt, Random ID
+    const payload = {
+      player,
+      product: product.id,
+      jti: crypto.randomUUID()
+    };
 
-    console.log("💎 Lizenz erstellt:", key);
+    // JWT mit Ablauf von 30 Tagen
+    const token = jwt.sign(payload, LICENSE_SECRET, {
+      algorithm: "HS256",
+      expiresIn: "30d"
+    });
+
+    // exp aus Token lesen (Sekunden → Millisekunden)
+    const decoded = jwt.decode(token);
+    const expires = decoded && decoded.exp
+      ? decoded.exp * 1000
+      : Date.now() + 30 * 24 * 60 * 60 * 1000;
+
+    console.log("💎 Lizenz erstellt (JWT):", token);
 
     // Save to MySQL
-    await saveLicense(key, player, email, expires);
+    await saveLicense(token, player, email, expires);
 
-    // Answer Tebex
+    // Antwort an Tebex
     res.json({
       id,
       success: true,
-      license: key,
+      license: token,
       player,
       expires
     });
 
-    // Send email
+    // Email mit Key
     if (email) {
-      sendLicenseEmail(email, key)
+      sendLicenseEmail(email, token, expires)
         .then(() => console.log("📧 Email sent async"))
         .catch(err => console.error("❌ Async Email Error:", err));
     }
@@ -179,18 +222,43 @@ app.post("/tebex", async (req, res) => {
 // ----------------------------------------------------------
 //  VALIDATE ENDPOINT (for Minecraft plugin)
 // ----------------------------------------------------------
+//
+//  GET /validate?key=XYZ
+//  Antwort:
+//    { valid: true/false, player?: "...", expires?: 123456789 }
+// ----------------------------------------------------------
 
 app.get("/validate", async (req, res) => {
   const key = req.query.key;
 
-  if (!key) return res.json({ valid: false });
+  if (!key) {
+    return res.json({ valid: false });
+  }
 
+  // 1) JWT Signatur + Ablauf prüfen
+  let decoded;
+  try {
+    decoded = jwt.verify(key, LICENSE_SECRET); // wirft Error bei ungültig / abgelaufen
+  } catch (err) {
+    console.warn("❌ Ungültiger oder abgelaufener Token:", err.message);
+    return res.json({ valid: false });
+  }
+
+  // 2) MySQL-Eintrag prüfen (Revokes möglich)
   const lic = await getLicense(key);
-  if (!lic) return res.json({ valid: false });
+  if (!lic) {
+    console.warn("❌ Lizenz nicht in DB gefunden:", key);
+    return res.json({ valid: false });
+  }
 
-  if (Date.now() > lic.expires) return res.json({ valid: false });
+  // 3) (Optional) Ablauf mit DB gegenprüfen
+  if (Date.now() > lic.expires) {
+    console.warn("⌛ Lizenz in DB abgelaufen:", key);
+    return res.json({ valid: false });
+  }
 
-  res.json({
+  // Alles okay → Lizenz gültig
+  return res.json({
     valid: true,
     player: lic.player,
     expires: lic.expires
