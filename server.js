@@ -18,44 +18,29 @@ app.use(bodyParser.json({
 app.use(cors());
 
 // ----------------------------------------------------------
-//  MYSQL CONNECTION (with Auto-Reconnect)
+//  MYSQL CONNECTION (POOL – STABIL FÜR G-PORTAL)
 // ----------------------------------------------------------
 
-let db;
+const db = mysql.createPool({
+  host: process.env.MYSQL_HOST,     // db2.sql.g-portal.com
+  user: process.env.MYSQL_USER,     // db_17972439_1
+  password: process.env.MYSQL_PASS, // ***
+  database: process.env.MYSQL_DB,   // db_17972439_1
+  port: 3306,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
+});
 
-async function connectDB() {
-  try {
-    const connection = await mysql.createConnection({
-      host: process.env.MYSQL_HOST,      // z. B. db2.sql.g-portal.com
-      user: process.env.MYSQL_USER,      // z. B. db_17972439_1
-      password: process.env.MYSQL_PASS,  // z. B. slosRq53
-      database: process.env.MYSQL_DB,    // z. B. db_17972439_1
-      port: 3306
-    });
-
-    console.log("✅ MySQL: Verbindung hergestellt.");
-    return connection;
-
-  } catch (err) {
-    console.error("❌ MySQL Verbindung fehlgeschlagen:", err);
-    setTimeout(connectDB, 2000); // retry
-  }
-}
-
-(async () => {
-  db = await connectDB();
-
-  if (db) {
-    db.on("error", async (err) => {
-      console.error("❌ MySQL Fehler:", err);
-
-      if (err.code === "PROTOCOL_CONNECTION_LOST") {
-        console.log("🔄 MySQL wird neu verbunden...");
-        db = await connectDB();
-      }
-    });
-  }
-})();
+// Testverbindung
+db.getConnection()
+  .then(conn => {
+    console.log("✅ MySQL Pool: Verbindung hergestellt.");
+    conn.release();
+  })
+  .catch(err => {
+    console.error("❌ MySQL Pool Fehler:", err);
+  });
 // ----------------------------------------------------------
 //  RESEND EMAIL SENDER
 // ----------------------------------------------------------
