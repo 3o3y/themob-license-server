@@ -50,6 +50,20 @@ const globalLimiter = rateLimit({
 
 app.use(globalLimiter);
 
+// Test Payments haben KEINE Signatur → akzeptieren für Testmodus
+const isTestPayment = body.subject?.payment_method?.name === "Test Payments";
+
+if (!isTestPayment) {
+    // echte Zahlungen → Signatur MUSS stimmen
+    if (!verifyTebexSignature(req)) {
+        console.warn("❌ Ungültige Tebex-Signatur – Request blockiert.");
+        return res.status(401).json({ id, error: "invalid_signature" });
+    }
+} else {
+    console.log("⚠ Test Payment erkannt → Signaturprüfung übersprungen.");
+}
+
+
 // ----------------------------------------------------------
 //  ENV CHECKS
 // ----------------------------------------------------------
