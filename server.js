@@ -64,6 +64,7 @@ db.getConnection()
 //  RESEND EMAIL SENDER
 // ----------------------------------------------------------
 
+const { Resend } = require("resend");
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 async function sendLicenseEmail(to, key, expires) {
@@ -75,14 +76,62 @@ async function sendLicenseEmail(to, key, expires) {
       to,
       subject: "Your TheMob License Key",
       html: `
-        <h2>Your License Key</h2>
-        <p>Thank you for purchasing <b>The Mob</b>!</p>
-        <p>Your personal license key:</p>
-        <pre style="font-size:14px;background:#111;color:#0f0;padding:10px;border-radius:6px;white-space:pre-wrap;word-wrap:break-word;">
+  <div style="font-family:Arial,Helvetica,sans-serif;background:#0d0d0d;padding:25px;color:#e6e6e6;">
+    
+    <div style="max-width:560px;margin:auto;background:#1a1a1a;border-radius:14px;padding:25px;
+                box-shadow:0 0 20px rgba(0,0,0,0.35);border:1px solid #262626;">
+      
+      <!-- LOGO -->
+      <div style="text-align:center;margin-bottom:25px;">
+        <img src="LOGO_URL" alt="TheMob Logo" 
+             style="width:160px;height:auto;margin-bottom:10px;" />
+      </div>
+
+      <h2 style="color:#f1c40f;text-align:center;margin-top:0;font-size:26px;">
+        Your TheMob License Key
+      </h2>
+
+      <p style="font-size:15px;color:#dcdcdc;">
+        Thank you for purchasing <b style="color:#fff;">The Mob</b>!  
+        Below you will find your personal license key.  
+        <br><br>
+        Please keep it safe and do not share it with anyone.
+      </p>
+
+      <div style="
+        background:#111;
+        padding:14px;
+        margin:18px 0;
+        border-radius:8px;
+        font-size:14px;
+        color:#0f0;
+        border:1px solid #333;
+        white-space:pre-wrap;
+        word-wrap:break-word;
+        font-family:Consolas,monospace;
+      ">
 ${key}
-        </pre>
-        <p><b>Expires:</b> ${expiresDate}</p>
-        <p>Please keep this key safe and do not share it.</p>
+      </div>
+
+      <p style="font-size:15px;color:#bfbfbf;margin-bottom:6px;">
+        <b>Expires:</b> ${expiresDate}
+      </p>
+
+      <hr style="border:0;border-top:1px solid #333;margin:25px 0;">
+
+      <p style="font-size:13px;color:#777;text-align:center;line-height:1.5;">
+        This key can only be used on <b>one server installation</b> unless you purchased
+        a multi-server license.  
+        <br>
+        If you need additional activations, contact support anytime.
+      </p>
+
+      <p style="font-size:12px;color:#5e5e5e;text-align:center;margin-top:30px;">
+        © TheMob — Premium Minecraft Boss & Mob System
+      </p>
+
+    </div>
+  </div>
       `
     });
 
@@ -92,6 +141,7 @@ ${key}
     console.error("❌ Email sending failed:", err);
   }
 }
+
 
 // ----------------------------------------------------------
 //  MYSQL SAVE LICENSE
