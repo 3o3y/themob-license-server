@@ -50,20 +50,6 @@ const globalLimiter = rateLimit({
 
 app.use(globalLimiter);
 
-// Test Payments haben KEINE Signatur → akzeptieren für Testmodus
-const isTestPayment = body.subject?.payment_method?.name === "Test Payments";
-
-if (!isTestPayment) {
-    // echte Zahlungen → Signatur MUSS stimmen
-    if (!verifyTebexSignature(req)) {
-        console.warn("❌ Ungültige Tebex-Signatur – Request blockiert.");
-        return res.status(401).json({ id, error: "invalid_signature" });
-    }
-} else {
-    console.log("⚠ Test Payment erkannt → Signaturprüfung übersprungen.");
-}
-
-
 // ----------------------------------------------------------
 //  ENV CHECKS
 // ----------------------------------------------------------
@@ -337,10 +323,17 @@ app.post("/tebex", async (req, res, next) => {
     return res.json({ id });
   }
 
-  // Ab hier: Zahlung, also Signatur Pflicht
-  if (!verifyTebexSignature(req)) {
-    console.warn("❌ Ungültige Tebex-Signatur – Request blockiert.");
-    return res.status(401).json({ id, error: "invalid_signature" });
+  // TEST PAYMENT ERKENNEN
+  const isTestPayment = body.subject?.payment_method?.name === "Test Payments";
+
+  if (isTestPayment) {
+    console.log("⚠ Test Payment erkannt → Signaturprüfung übersprungen.");
+  } else {
+    // Ab hier: echte Zahlung, also Signatur Pflicht
+    if (!verifyTebexSignature(req)) {
+      console.warn("❌ Ungültige Tebex-Signatur – Request blockiert.");
+      return res.status(401).json({ id, error: "invalid_signature" });
+    }
   }
 
   // PAYMENT COMPLETED
