@@ -18,7 +18,7 @@ const rateLimit = require("express-rate-limit");
 const app = express();
 
 // Render / Proxy Setup – wichtig für X-Forwarded-For & HTTPS
-app.set("trust proxy", true);
+app.set("trust proxy", 1);
 
 // ----------------------------------------------------------
 //  HTTPS ERZWINGEN
