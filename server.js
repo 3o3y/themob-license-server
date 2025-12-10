@@ -17,6 +17,21 @@ const rateLimit = require("express-rate-limit");
 
 const app = express();
 
+// Render / Proxy Setup – wichtig für X-Forwarded-For & HTTPS
+app.set("trust proxy", true);
+
+// ----------------------------------------------------------
+//  HTTPS ERZWINGEN
+// ----------------------------------------------------------
+
+app.use((req, res, next) => {
+  const proto = req.headers["x-forwarded-proto"] || req.protocol;
+  if (proto !== "https") {
+    return res.status(400).json({ error: "https_required" });
+  }
+  next();
+});
+
 // ----------------------------------------------------------
 //  BODY-PARSER (mit RAW BODY für Tebex-Signatur)
 // ----------------------------------------------------------
@@ -43,7 +58,7 @@ app.use(cors({ origin: false }));
 // Globales Rate-Limit (zusätzlich zum /validate-Limit)
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 Minuten
-  max: 300,                  // 300 Requests pro IP / 15min
+  max: 300,                 // 300 Requests pro IP / 15min
   standardHeaders: true,
   legacyHeaders: false
 });
@@ -72,6 +87,7 @@ envOk &= requireEnv("MYSQL_DB");
 envOk &= requireEnv("RESEND_API_KEY");
 envOk &= requireEnv("LICENSE_SECRET");
 envOk &= requireEnv("TEBEX_SECRET");
+// Tebex-IP-Whitelist optional, daher kein requireEnv
 
 if (!envOk) {
   console.error("❌ Kritische ENV-Variablen fehlen. Server wird NICHT gestartet.");
@@ -79,7 +95,18 @@ if (!envOk) {
 }
 
 const LICENSE_SECRET = process.env.LICENSE_SECRET;
-const TEBEX_SECRET = process.env.TEBEX_SECRET;
+const TEBEX_SECRET   = process.env.TEBEX_SECRET;
+
+// Optional: IP-Whitelist für Tebex, z.B.
+// TEBEX_IP_WHITELIST="51.89.153.0/24,51.89.152.10,1.2.3."
+const TEBEX_IP_WHITELIST = (process.env.TEBEX_IP_WHITELIST || "")
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
+
+if (TEBEX_IP_WHITELIST.length === 0) {
+  console.warn("⚠ TEBEX_IP_WHITELIST ist leer – IP-Whitelisting ist deaktiviert.");
+}
 
 // Sanity-Check: LICENSE_SECRET darf nicht mein Default-String sein
 if (LICENSE_SECRET === "CHANGE_ME_NOW_IN_PRODUCTION") {
@@ -100,8 +127,7 @@ const db = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  // falls dein Hoster SSL braucht:
-  // ssl: { rejectUnauthorized: true }
+  // ssl: { rejectUnauthorized: true } // falls Hoster das verlangt
 });
 
 // Testverbindung
@@ -250,22 +276,10 @@ function verifyTebexSignature(req) {
   }
 }
 
-// ----------------------------------------------------------
-//  MYSQL SAVE LICENSE
-// ----------------------------------------------------------
-
-async function saveLicense(key, player, email, expires) {
-  try {
-    await db.execute(
-      "INSERT INTO licenses (license_key, player, email, expires, created) VALUES (?, ?, ?, ?, ?)",
-      [key, player, email || "", expires, Date.now()]
-    );
-
-    console.log("💾 Lizenz gespeichert (MySQL):", shortKeyHash(key));
-
-  } catch (err) {
-    console.error("❌ FEHLER beim Speichern in MySQL:", err.message);
-  }
+// IP-Ermittlung (für Tebex-Whitelist)
+function getClientIp(req) {
+  // durch trust proxy liefert req.ip schon den richtigen Client
+  return (req.ip || "").replace("::ffff:", "");
 }
 
 // ----------------------------------------------------------
@@ -298,6 +312,23 @@ async function saveLicense(key, player, email, expires, attempt = 1) {
 }
 
 // ----------------------------------------------------------
+//  MYSQL GET LICENSE
+// ----------------------------------------------------------
+
+async function getLicense(key) {
+  try {
+    const [rows] = await db.execute(
+      "SELECT * FROM licenses WHERE license_key = ? LIMIT 1",
+      [key]
+    );
+    return rows.length > 0 ? rows[0] : null;
+  } catch (err) {
+    console.error("❌ FEHLER beim Lesen aus MySQL:", err.message);
+    return null;
+  }
+}
+
+// ----------------------------------------------------------
 //  ROOT + HEALTHCHECK
 // ----------------------------------------------------------
 
@@ -320,13 +351,27 @@ app.get("/health", async (req, res) => {
 
 const TARGET_PACKAGE_ID = 7156613; // dein Tebex-Paket
 
-app.post("/tebex", async (req, res, next) => {
+app.post("/tebex", async (req, res) => {
   const body = req.body || {};
-  const id = body.id || null;
+  const id   = body.id   || null;
   const type = body.type || "unknown";
 
   // Minimales Logging, ohne persönliche Daten
   console.log("📬 Tebex Webhook:", { id, type });
+
+  // IP-Whitelist: nur Tebex-IPs zulassen, falls gesetzt
+  if (TEBEX_IP_WHITELIST.length > 0) {
+    const clientIp = getClientIp(req);
+    const allowed = TEBEX_IP_WHITELIST.some(entry => {
+      // exakte IP oder Prefix
+      return clientIp === entry || clientIp.startsWith(entry);
+    });
+
+    if (!allowed) {
+      console.warn("❌ Tebex-Webhook von nicht erlaubter IP:", clientIp);
+      return res.status(403).json({ id, error: "ip_not_allowed" });
+    }
+  }
 
   // VALIDATION – laut Tebex muss hier nur { id } zurück
   if (type === "validation.webhook") {
@@ -349,8 +394,8 @@ app.post("/tebex", async (req, res, next) => {
   // PAYMENT COMPLETED
   if (type === "payment.completed") {
     try {
-      const product = body.subject?.products?.[0] || {};
-      const customer = body.subject?.customer || {};
+      const product  = body.subject?.products?.[0] || {};
+      const customer = body.subject?.customer       || {};
 
       if (!product.id) {
         console.warn("⚠ Kein Produkt in Tebex-Payload gefunden.");
@@ -363,7 +408,7 @@ app.post("/tebex", async (req, res, next) => {
       }
 
       const player = customer?.username?.username || "unknown";
-      const email = customer?.email || null;
+      const email  = customer?.email || null;
 
       // ======================================================
       //  SIGNIERTER LIZENZ-SCHLÜSSEL (JWT)
@@ -447,9 +492,8 @@ app.get("/validate", validateLimiter, async (req, res) => {
   }
 
   // 1) JWT Signatur + Ablauf prüfen
-  let decoded;
   try {
-    decoded = jwt.verify(key, LICENSE_SECRET); // wirft Error bei ungültig / abgelaufen
+    jwt.verify(key, LICENSE_SECRET); // wirft Error bei ungültig / abgelaufen
   } catch (err) {
     console.warn("❌ Ungültiger oder abgelaufener Token:", err.message, "Hash:", shortKeyHash(key));
     return res.json({ valid: false });
