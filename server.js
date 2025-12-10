@@ -83,7 +83,7 @@ async function sendLicenseEmail(to, key, expires) {
       
       <!-- LOGO -->
       <div style="text-align:center;margin-bottom:25px;">
-        <img src="LOGO_URL" alt="TheMob Logo" 
+        <img src="https://dunb17ur4ymx4.cloudfront.net/packages/images/69849ebfdf339bc7ec4a317bdb34c87ac3a54a05.png" alt="TheMob Logo" 
              style="width:160px;height:auto;margin-bottom:10px;" />
       </div>
 
