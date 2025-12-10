@@ -269,21 +269,31 @@ async function saveLicense(key, player, email, expires) {
 }
 
 // ----------------------------------------------------------
-//  MYSQL GET LICENSE
+//  MYSQL SAVE LICENSE (mit Retry & extra Logging)
 // ----------------------------------------------------------
 
-async function getLicense(key) {
+async function saveLicense(key, player, email, expires, attempt = 1) {
   try {
-    const [rows] = await db.execute(
-      "SELECT * FROM licenses WHERE license_key = ? LIMIT 1",
-      [key]
+    await db.execute(
+      "INSERT INTO licenses (license_key, player, email, expires, created) VALUES (?, ?, ?, ?, ?)",
+      [key, player, email || "", expires, Date.now()]
     );
 
-    return rows.length > 0 ? rows[0] : null;
+    console.log("💾 Lizenz gespeichert (MySQL):", shortKeyHash(key));
 
   } catch (err) {
-    console.error("❌ FEHLER beim Lesen aus MySQL:", err.message);
-    return null;
+    console.error("❌ FEHLER beim Speichern in MySQL (Versuch " + attempt + "):", {
+      message: err.message,
+      code: err.code,
+      errno: err.errno,
+      sqlState: err.sqlState
+    });
+
+    // Bei ECONNRESET einmal neu versuchen
+    if (err.code === "ECONNRESET" && attempt < 2) {
+      console.warn("⚠ ECONNRESET → versuche Save erneut …");
+      return saveLicense(key, player, email, expires, attempt + 1);
+    }
   }
 }
 
