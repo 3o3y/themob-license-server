@@ -422,7 +422,7 @@ app.post("/tebex", async (req, res) => {
       // JWT mit Ablauf von 30 Tagen
       const token = jwt.sign(payload, LICENSE_SECRET, {
         algorithm: "HS256",
-        expiresIn: "60s"
+        expiresIn: "30d"
       });
 
       // exp aus Token lesen (Sekunden → Millisekunden)
